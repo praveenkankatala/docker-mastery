@@ -1,0 +1,62 @@
+# Three-tier app demonstrating NETWORK ISOLATION and VOLUMES.
+#
+#   Internet ─▶ frontend ──frontend-net──▶ backend ──backend-net──▶ database
+#                                                                    (unreachable
+#                                                                     from frontend)
+#
+# - frontend is ONLY on frontend-net  → cannot see the database
+# - backend  is on BOTH networks       → the only bridge to the DB
+# - database is ONLY on backend-net    → private, never published to the host
+#
+# Volumes:
+# - db_data     → persists Postgres data across recreates
+# - static_files→ shared between backend (writes uploads) and frontend (serves them)
+
+services:
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "8080:80"                     # the only publicly exposed port
+    networks:
+      - frontend-net
+    volumes:
+      - static_files:/usr/share/nginx/html/images:ro   # read-only: only serves
+
+  backend:
+    image: nginx:alpine               # stand-in for your API image
+    networks:
+      - frontend-net                  # reachable by frontend
+      - backend-net                   # can reach database
+    volumes:
+      - static_files:/app/uploads     # writes user uploads here
+    depends_on:
+      database:
+        condition: service_healthy
+
+  database:
+    image: postgres:16-alpine
+    networks:
+      - backend-net                   # private tier only
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  frontend-net:
+  backend-net:
+
+volumes:
+  db_data:
+  static_files:
+
+secrets:
+  db_password:
+    file: ./db_password.txt
